@@ -126,6 +126,12 @@ class DataSimulator:
         - bin_labels (list): Labels for the bins.
         """
         # Calculate the size of each bin
+        if latest_time < earliest_time:
+            raise Exception("Latest time should not be less than earliest time!")
+        elif latest_time == earliest_time:
+            bin_edges = [earliest_time, latest_time]
+            bin_labels = [f'bin_{0}']
+            return bin_edges, bin_labels
 
         #dynamically bin into hours
         factor = 3 #int(np.round((latest_time-earliest_time)/3600))
@@ -290,9 +296,10 @@ class DataSimulator:
                 # Find earliest and latest times
                 earliest_time_in_seconds = cluster_df['Time_in_seconds'].min()
                 latest_time_in_seconds = cluster_df['Time_in_seconds'].max()
-
+                
                 # Create bins
                 bin_edges, bin_labels = self.create_bins(earliest_time_in_seconds, latest_time_in_seconds)
+                
                 # Assign bins
                 cluster_df['Bin'] = pd.cut(
                     cluster_df['Time_in_seconds'],
@@ -329,7 +336,7 @@ class DataSimulator:
                         data = diffed_weekday_data_dict[key]
                         if data.size > 0:
                             base_bw = silvermans_rule(data.reshape(-1, 1))
-                            
+                            #base_bw = improved_sheather_jones(data.reshape(-1, 1))
                             # try:
                             kernel_std = (1+self.bw_factor_dict[segment_cluster]) * base_bw
                             # except Exception as e:

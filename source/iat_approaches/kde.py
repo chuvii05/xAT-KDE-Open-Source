@@ -168,9 +168,9 @@ class KDEIATGenerator():
                 
         output_df, clustered_train_dict = _setup_clustered_train_dict(self.train.copy(), start_time, end_time)
         #diagnostics to access globally set clusters 
-        # self.logger.info('Saving output_df to csv...')
-        # output_df.to_csv('output_df.csv')
-        # self.logger.info('Complete.')
+        self.logger.info('Saving output_df to csv...')
+        output_df.to_csv('output_df.csv')
+        self.logger.info('Complete.')
         
         # self.logger.info(f'number of observations per cluster: {output_df.groupby("predicted_cluster").count()}')
         train_df_clustered = (
