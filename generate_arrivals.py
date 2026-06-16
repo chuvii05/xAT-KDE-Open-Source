@@ -200,7 +200,6 @@ if __name__ == "__main__":
                                 seed = args.seed,
                                 kwargs = args.kwargs
                             )
-
     # generate arrivals
     case_arrival_times = generator.generate(start_time=start_time, end_time=end_time)
 

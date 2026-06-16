@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+import time as time
 from scipy.stats import wasserstein_distance
 import logging
 from utils.helper import (
@@ -165,7 +166,8 @@ class KDEIATGenerator():
             # self.logger.info(f'best_emd: {best_emd}')
             # self.logger.info(f'best_bw_factor: {best_bw_factor}')
             return best_emd, bw_emd_dict, best_bw_factor
-                
+        
+        start_training_time = time.time()        
         output_df, clustered_train_dict = _setup_clustered_train_dict(self.train.copy(), start_time, end_time)
         #diagnostics to access globally set clusters 
         self.logger.info('Saving output_df to csv...')
@@ -200,9 +202,12 @@ class KDEIATGenerator():
                         path = False, 
                         bw_factor_dict = optimal_bandwidths_per_global_cluster
                     )
-
+        end_training_time = time.time()
+        print('Training took %s seconds', (end_training_time-start_training_time))
         simulated_data, _ = ds_class.sample_kde(start_time = start_time, end_time = end_time)
         self.logger.info('Complete.')
+        end_simulation_time = time.time()
+        print('Simulation took %s seconds', (end_simulation_time - end_training_time))
         return simulated_data
 
 def evaluate_validation_performance(simulated_data, val_data):
