@@ -152,7 +152,7 @@ class KDEIATGenerator():
                             bw_factor_dict = bw_factor_dict
                         )
                 simulated_data, _ = ds_class.sample_kde(start_time = val_bw[0], end_time = val_bw[-1])
-
+                #breakpoint()
                 # evaluate validation performance
                 validation_data =  pd.to_datetime(val_bw)
                 emd = evaluate_validation_performance(simulated_data, validation_data)
@@ -183,14 +183,14 @@ class KDEIATGenerator():
                 .sort_values("date", ignore_index=True)
             )
         
-        optimal_bandwidths_per_global_cluster = {}
+        """optimal_bandwidths_per_global_cluster = {}
 
         for gc in clustered_train_dict:
             self.logger.info(f'Optimize bandwidth for global cluster {gc}..')
             _, _, best_bw_factor_gc = _run_bandwidth_optimisation(clustered_train_dict[gc].copy(), gc)
             optimal_bandwidths_per_global_cluster[gc] = best_bw_factor_gc
             
-        self.logger.info(f'Optimization complete.')
+        self.logger.info(f'Optimization complete.')"""
         # simulate arrivals with KDE  
         self.logger.info('Generating Arrivals now...')
         ds_class = DataSimulator(
@@ -200,7 +200,7 @@ class KDEIATGenerator():
                         train_clustered = clustered_train_dict,
                         test_cluster_estim = output_df,
                         path = False, 
-                        bw_factor_dict = optimal_bandwidths_per_global_cluster
+                        #bw_factor_dict = optimal_bandwidths_per_global_cluster
                     )
         end_training_time = time.time()
         print('Training took %s seconds', (end_training_time-start_training_time))
