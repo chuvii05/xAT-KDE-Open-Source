@@ -113,15 +113,10 @@ class DataSimulator:
         self.irregular_special_days = None
         self.regular_special_days = []
         self.german_holidays = holidays.DE(expand=True)
-         # dataframe needs to follow format of Event_Rules.csv with columns 'Event','Start_Date', 'Frequency', count, 'Nth', 'Weekday'
-        """ts_df = pd.read_csv('kde_core/specialday_data/event-days.csv')
-        self.irregular_special_days = rruleset()
-        for _, row in ts_df.iterrows():
-            str_rule = row['rule']
-            rule = rrulestr(str_rule, dtstart=parse(row['start_date']))
-            self.special_days.rrule(rule)"""
         self.global_curve_dict = {}
         self.global_bin_edge_dict = {}
+        self.aib_usage = 0.0
+        self.total_usage = 0.0
         self.prepare_kde_models()
 
         #set global upper and lower bound working hours
@@ -146,6 +141,7 @@ class DataSimulator:
         # Calculate the size of each bin
 
         #dynamically bin into hours
+
         factor = 3 #int(np.round((latest_time-earliest_time)/3600))
         
         delta = (latest_time - earliest_time) / factor #3 = morning afternoon evening 
@@ -156,10 +152,12 @@ class DataSimulator:
         return bin_edges, bin_labels
     
     def is_irregular_special_day(self, timestamp):
+        #deprecated method for irregular days, can be removed by demand
         current = datetime(timestamp.date().year, timestamp.date().month, timestamp.date().day, hour=0, minute=0, second=0)
         is_special = self.special_days.after(current, inc = True) ==  current
         return is_special
-    
+
+    #nth weekday of month, e.g. 1st Friday
     def label_regular_special_day(self, timestamp):
         current_week = (timestamp.day - 1) // 7 + 1
         current_weekday = timestamp.isoweekday()
@@ -179,18 +177,17 @@ class DataSimulator:
         ts_tmp['date'] = ts_tmp['timestamp'].apply(lambda x: x.date())
         ts_tmp = ts_tmp.groupby('date').size().reset_index(name='arrivals_per_day')
         ts_tmp['arrival_class'] = stats.zscore(ts_tmp['arrivals_per_day'], nan_policy='omit')
-        ts_tmp['arrival_class'] = ts_tmp['arrival_class'].apply(lambda x: 'outlier' if x > 3 else 'normal')
+        ts_tmp['arrival_class'] = ts_tmp['arrival_class'].apply(lambda x: 'outlier' if 0 < x > 3 else 'normal')
         ts_tmp['regular_special_day'] = ts_tmp['date'].apply(lambda x: self.label_regular_special_day(datetime(x.year, x.month, x.day)))
         # force aib to merge until only 2 categories remain with restraint if they are very informative about Y (MI = 0.8), where one category represents regular special days that are informative about most arrival counts.
         # we use aib to infer if monthly regular days are highly informative about high arrivals if yes we cluster them together.
-        assignments, _, development = aib.information_bottleneck_clustering(ts_tmp['regular_special_day'], ts_tmp['arrival_class'] , 2, x_is_discrete=True, y_is_discrete=True, min_mi = 0.8)
+        assignments, _, development = aib.information_bottleneck_clustering(ts_tmp['regular_special_day'], ts_tmp['arrival_class'] , 2, x_is_discrete=True, y_is_discrete=True)
         if len(development) > 1:
             ts_tmp['aib_assignments_regular_special'] = assignments
             regular_special_day = (ts_tmp[ts_tmp[f'aib_assignments_regular_special'] == 1]['regular_special_day']).unique()
             self.regular_special_days = np.concatenate((self.regular_special_days, regular_special_day))
-
         ts_tmp['regular_holiday'] = ts_tmp['date'].apply(lambda x: self.label_regular_holiday(datetime(x.year, x.month, x.day)))
-        assignments, _, development = aib.information_bottleneck_clustering(ts_tmp['regular_holiday'], ts_tmp['arrival_class'] , 2, x_is_discrete=True, y_is_discrete=True, min_mi = 0.8)
+        assignments, _, development = aib.information_bottleneck_clustering(ts_tmp['regular_holiday'], ts_tmp['arrival_class'] , 2, x_is_discrete=True, y_is_discrete=True)
         if len(development) > 1:
             ts_tmp['aib_assignments_holiday'] = assignments
             regular_holidays = (ts_tmp[ts_tmp['aib_assignments_holiday'] == 1]['regular_holiday']).unique()
@@ -231,7 +228,6 @@ class DataSimulator:
             # self.logger.info(f'timestamp_list:{timestamp_list[:2]}')
             timestamps_df = pd.DataFrame({'timestamp': timestamp_list})
             self.find_regular_special_days(timestamps_df)
-            
             # assign each timestamp to either a weekday (1-7), holiday (8) or event day (9)
             timestamps_df['weekday_num'] = timestamps_df['timestamp'].apply(lambda x: self.evaluate_special_holiday(x))
             timestamps_grouped = timestamps_df.groupby('weekday_num')
@@ -365,11 +361,10 @@ class DataSimulator:
                 cluster_df['day_in_hour'] = cluster_df['Timestamp'].dt.hour
                 cluster_df['duration'] = cluster_df['Timestamp'].diff().dt.seconds
                 cluster_df = cluster_df[~ np.isnan( cluster_df['duration'])]
-                cluster_df['duration_bin'] = pd.qcut(cluster_df['duration'], q = 6, duplicates='drop')
-                
-                #agglomerative information bottleneck algorithm implemented by Michel Kunkler https://github.com/ltsstar/TaskExecutionTimeMining/blob/main/src/TaskExecutionTimeMining/information_bottleneck.py   
-                assignments, _, development = aib.information_bottleneck_clustering(cluster_df['day_in_minutes'], cluster_df['duration_bin'], n_clusters = 4, x_is_discrete=True, y_is_discrete=True, min_mi=0.5)
+                cluster_df['duration_bin'] = pd.qcut(cluster_df['duration'], q = 20, duplicates='drop')
 
+                #modified agglomerative information bottleneck algorithm based on implementation of Michel Kunkler https://github.com/ltsstar/TaskExecutionTimeMining/blob/main/src/TaskExecutionTimeMining/information_bottleneck.py   
+                assignments, _, development = aib.information_bottleneck_clustering(cluster_df['day_in_minutes'], cluster_df['duration_bin'], n_clusters = 1, x_is_discrete=True, y_is_discrete=True)
                 #In the following we define interval/phase as the  'i' limit detection + kde bandwidth creation for each interval i
                 if len(development) > 1:
                     """
@@ -397,13 +392,15 @@ class DataSimulator:
                     intervals = np.cumsum(cut_map).tolist()
                     bin_edge = cluster_df_sorted.iloc[intervals, 2].tolist()
                     bin_edge_dict[f'weekday_cluster_{weekday_cluster}'] = bin_edge
-                    #if weekday_cluster == 3: breakpoint()
+                    
                     # add all interarrival training data (interarrivals) to diffed_weekday_data_dict and learn bandwidth from training data
                     for section_key, g in cluster_df_sorted.groupby('aib_category')['duration'].apply(np.array).to_dict().items():
                         key = f'weekday_cluster_{weekday_cluster}_phase_{section_key}' #usage of phase instead of bin to differ between data later on
                         interarrivals = g/3600
 
                         if interarrivals.size > 0:
+                               self.aib_usage += 1 #we count the number of times aib is used to learn kde models
+                               self.total_usage += 1
                                diffed_weekday_data_dict[key] = interarrivals
                                kernel_std = improved_sheather_jones(interarrivals.reshape(-1, 1)) if interarrivals.size > 100 else silvermans_rule(interarrivals.reshape(-1,1))
                                diffed_weekday_kernel_std_dict[key] = kernel_std
@@ -412,13 +409,20 @@ class DataSimulator:
                             diffed_weekday_kernel_std_dict[key] = None  # No data to compute KDE
                 else:
                     # Find earliest and latest times
-                    earliest_time_in_seconds_row = cluster_df.sort_values(by=['duration', 'Time_in_seconds'], ascending=False)
-                    earliest_time_in_seconds = earliest_time_in_seconds_row.iloc[0,2]
-                    latest_time_in_seconds = earliest_time_in_seconds + (86400 - earliest_time_in_seconds_row.iloc[0,5])
-                    
+                    #Prone to ambigious working hours, e.g, 22:00 to 4:00, either opening time can be from 4 am to 10pm as assumed by AT-KDE or it can be 10pm to 4am.
+                    #As we intend to compare the results of the original AT-KDE with xAT-KDE, we will not use soley line 426-428 working hour algorithm to compute the working hours, as we intend to use the original AT-KDE 
+                    #function behavior for study comparison.
+                    earliest_time_in_seconds = cluster_df['Time_in_seconds'].min()
+                    latest_time_in_seconds = cluster_df['Time_in_seconds'].max()
+                    #in case of equal earliest and latest time, we calculate the earliest and latest time by finding the timestamps with the longest duration since the last arrival, to define the working hours.
+                    if(earliest_time_in_seconds == latest_time_in_seconds):
+                        earliest_time_in_seconds_row = cluster_df.sort_values(by=['duration', 'Time_in_seconds'], ascending=False)
+                        earliest_time_in_seconds = earliest_time_in_seconds_row.iloc[0,2]
+                        latest_time_in_seconds = earliest_time_in_seconds + (86400 - earliest_time_in_seconds_row.iloc[0,5])
+
                     # Create bins
                     bin_edges, bin_labels = self.create_bins(earliest_time_in_seconds, latest_time_in_seconds)
-                    
+                    self.total_usage += float(len(bin_labels))
                     # Assign bins
                     cluster_df['Bin'] = pd.cut(
                         cluster_df['Time_in_seconds'],
@@ -465,10 +469,12 @@ class DataSimulator:
                                 diffed_weekday_kernel_std_dict[key] = kernel_std
                             else:
                                 diffed_weekday_kernel_std_dict[key] = None  # No data to compute KDE
+
             self.global_curve_dict[segment_cluster] = curve_dict
             self.global_bin_edge_dict[segment_cluster] = bin_edge_dict
             self.diffed_data_dict[segment_cluster] = diffed_weekday_data_dict
             self.diffed_kernel_std_dict[segment_cluster] = diffed_weekday_kernel_std_dict
+            
 
     def first_diff_data(self, data):
         """
@@ -617,7 +623,7 @@ class DataSimulator:
         self.final_timestamp_train = self.ref_data['date'].iloc[-1]
         start_ts = pd.to_datetime(start_time)
         end_ts   = pd.to_datetime(end_time)
-        
+        print(f'AIB Usage: {self.aib_usage/self.total_usage*100:.2f}% of clusters used AIB for segmentation')
         #align timezone to training tz
         train_tz = min_timestamp_train.tz
         if train_tz is not None:
@@ -642,7 +648,6 @@ class DataSimulator:
         for day_ts in all_days:
             current_date = pd.to_datetime(day_ts)
             corresponding_weekday_cluster = self.date_to_cluster[self.evaluate_special_holiday(current_date)]
-            #.isoweekday() gets integer value (range 1-7) for a date object
 
             if current_date not in self.test_cluster_estim.index:
                 continue
@@ -660,11 +665,11 @@ class DataSimulator:
             final_sequence = []
 
             tmp = f'weekday_cluster_{corresponding_weekday_cluster}'
+            #Search for dynamic model
             if tmp in self.global_curve_dict[current_date_predicted_cluster].keys():
                 current_curve = self.global_curve_dict[current_date_predicted_cluster].get(tmp)
                 float_bin_edges = [edge / 3600 for edge in self.global_bin_edge_dict[current_date_predicted_cluster].get(tmp)]
-                if current_date.isoweekday() == 1:
-                    print(float_bin_edges)
+
                 #for phase, current_bin_edge in zip(self.curve_dict[tmp], float_bin_edges): #we iterate through data encoding "curve"
                 for phase, current_bin_edge in zip(current_curve, float_bin_edges):
                     if current_time > current_bin_edge:
@@ -722,7 +727,7 @@ class DataSimulator:
                         current_time = current_bin_edge  # Move to the next bin edge if no arrivals
             #after the loop, ensure the final times do not exceed upper_time
             final_sequence = [t for t in final_sequence if t <= upper_time]
-            #breakpoint()
+            
             day_sequences = []
             for time_float in final_sequence:
                 hours = int(time_float)

@@ -8,7 +8,7 @@ from numba import jit, float64, int32
 
 
 #Agglomerative Information Bottleneck implementation by Michel Kunkler: https://github.com/ltsstar/TaskExecutionTimeMining/blob/main/src/TaskExecutionTimeMining/information_bottleneck.py
-
+#this code represents a modified version of the original code, using asymmetric normalization for mutual information.
 # Custom entropy function for Numba compatibility
 @jit(nopython=True)
 def custom_entropy(p):
@@ -72,13 +72,13 @@ def compute_current_conditional_entropy(joint_counts, n_current_clusters, n_bins
     return H_Y_given_T
 
 # Agglomerative Information Bottleneck algorithm
-def agglomerative_information_bottleneck(X_d, Y_d, n_clusters, n_bins_x, n_bins_y, min_mi):
+def agglomerative_information_bottleneck(X_d, Y_d, n_clusters, n_bins_x, n_bins_y):
     # Initialize clusters: each bin of X_d is its own cluster
     clusters = np.arange(n_bins_x)
     cluster_assignments = X_d.copy()  # Current cluster for each sample
     n_current_clusters = n_bins_x
-    if n_current_clusters > 300: #set limit to 300 in favor execution time
-        return cluster_assignments, [] 
+    if n_current_clusters > 300: #set limit to 300 in favor execution time, can be removed by demand, but will be slow for large datasets
+        return cluster_assignments, []
     # Debug: Check max indices in X_d and Y_d
     if np.max(X_d) >= n_bins_x or np.max(Y_d) >= n_bins_y:
         raise ValueError(f"Bin indices out of bounds: max(X_d)={np.max(X_d)} vs n_bins_x={n_bins_x}, max(Y_d)={np.max(Y_d)} vs n_bins_y={n_bins_y}")
@@ -99,9 +99,10 @@ def agglomerative_information_bottleneck(X_d, Y_d, n_clusters, n_bins_x, n_bins_
     H_Y_given_T = compute_current_conditional_entropy(joint_counts, n_current_clusters, n_bins_y)
     MI = H_Y - H_Y_given_T
     MI_norm = MI/H_Y if H_Y != 0 else MI #usage of asymmtetric normalization by https://arxiv.org/pdf/2307.01282
+    MI_norm_original = MI_norm
     development.append((n_current_clusters, MI_norm, ()))
     print(f"Initial (Clusters: {n_current_clusters}): Mutual Information I(T; Y) = {MI_norm:.6f}")
-    if MI_norm < min_mi:
+    if MI_norm_original == 0 or MI_norm_original > 0 and MI_norm/MI_norm_original < 0.8:#check if information loss is not higher than 20% due to compression
         return cluster_assignments, development
     # Progress bar for cluster merging
     total_merges = max(0, n_bins_x - n_clusters)
@@ -165,7 +166,7 @@ def agglomerative_information_bottleneck(X_d, Y_d, n_clusters, n_bins_x, n_bins_
             MI_norm = MI/H_Y if H_Y != 0 else MI #usage of asymmtetric normalization by https://arxiv.org/pdf/2307.01282
             development.append((n_current_clusters, MI_norm, merge_pair))
             print(f"Iteration {iteration + 1} (Clusters: {n_current_clusters}): Mutual Information I(T; Y) = {MI_norm:.6f}")
-            if MI_norm < min_mi:
+            if MI_norm_original == 0 or MI_norm_original > 0 and MI_norm/MI_norm_original < 0.8: #check if information loss is not higher than 20% due to compression
                 return cluster_assignments, development
             iteration += 1
             pbar.update(1)  # Update progress bar after each merge
@@ -177,8 +178,7 @@ def agglomerative_information_bottleneck(X_d, Y_d, n_clusters, n_bins_x, n_bins_
     return cluster_assignments, development
 
 # Main function to cluster X based on MI with Y
-def information_bottleneck_clustering(X, Y, n_clusters=3, n_bins_x=50, n_bins_y=20, x_is_discrete=False, y_is_discrete=False,
-                                      min_mi=float('inf')):
+def information_bottleneck_clustering(X, Y, n_clusters=3, n_bins_x=50, n_bins_y=20, x_is_discrete=False, y_is_discrete=False):
     # Validate input data
     if len(X) == 0 or len(Y) == 0:
         raise ValueError("Input arrays X or Y are empty")
@@ -247,7 +247,7 @@ def information_bottleneck_clustering(X, Y, n_clusters=3, n_bins_x=50, n_bins_y=
     #print(f"Y {'discrete' if y_is_discrete else 'continuous (quantile bins)'}, Adjusted n_bins_y: {n_bins_y}, Max Y_d index: {np.max(Y_d)}, Unique Y_d bins: {len(np.unique(Y_d))}")
     
     # Run agglomerative IB with adjusted n_bins_x and n_bins_y
-    cluster_assignments, development = agglomerative_information_bottleneck(X_d, Y_d, n_clusters, n_bins_x, n_bins_y, min_mi)
+    cluster_assignments, development = agglomerative_information_bottleneck(X_d, Y_d, n_clusters, n_bins_x, n_bins_y)
     
     # Map discretized bins back to continuous X ranges (or original discrete values)
     if x_is_discrete:
